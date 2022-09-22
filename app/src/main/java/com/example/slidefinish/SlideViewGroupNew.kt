@@ -82,7 +82,7 @@ class SlideViewGroupNew @JvmOverloads constructor(
             mDecorView.post {
                 // 反射使activity透明，否则右滑有问题，且不能设置透明主题，否则8.0手机设置屏幕方向会崩溃
                 // 如果不需要设置屏幕方向，可以直接使用透明主题，不需要以下方法
-                // 不用post页面打开就立即右滑还是会闪屏，过一会再右滑才正常
+                // 不用post页面打开就立即右滑还是会闪屏，过一会再右滑才正常(这个demo没出现，但是盒子app直播间会出现这个问题，可能和页面复杂程度有关)
                 Utils.convertActivityToTranslucent(mContext)
             }
         }
