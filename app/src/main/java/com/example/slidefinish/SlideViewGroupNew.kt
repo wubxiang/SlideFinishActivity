@@ -5,6 +5,7 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
+import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
@@ -14,19 +15,24 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import kotlin.math.abs
 import kotlin.math.min
-
 /**
  * 支持左右滑动，且可不拦截左滑
  * 兼容viewpager嵌套滑动
- * 需要设置activity主题透明（8.0系统设置主题透明后，不能设置屏幕方向，否则会崩溃）
- * 使用SlideExitUtils中的方法convertActivityToTranslucent()来使activity透明
+ *
+ * 如果不需要设置屏幕方向，则需要设置主题透明
+ *
+ * 有设置屏幕方向时，不能设置activity主题透明（8.0系统设置主题透明后，不能设置屏幕方向，否则会崩溃）
+ *
+ * 使用SlideExitUtils中的方法convertActivityToTranslucent()来使activity透明(切换横屏也会崩溃)
+ *
+ * 默认8.0手机不设置activity透明，且右滑无动效
  */
 class SlideViewGroupNew @JvmOverloads constructor(
     val mContext: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(mContext, attrs) {
 
-    var mDecorView: View = (mContext as Activity).window.decorView
+    var mDecorView: View
     var screenWidth = 0f
 
     private var mIsBeingDragged = false
@@ -50,6 +56,9 @@ class SlideViewGroupNew @JvmOverloads constructor(
     private var mInitialMotionX = 0f
     private var mInitialMotionY = 0f
 
+    // 是否支持滑动动画
+    private var mHasSlideAnim = false
+
     // 是否右滑
     private var mIsRightSlide = false
 
@@ -59,6 +68,7 @@ class SlideViewGroupNew @JvmOverloads constructor(
     private var mListener: ISlideListener? = null
 
     init {
+        mDecorView = (mContext as Activity).window.decorView
         screenWidth = ScreenUtil.getScreenWidth(mContext).toFloat()
 
         val configuration = ViewConfiguration.get(mContext)
@@ -66,6 +76,16 @@ class SlideViewGroupNew @JvmOverloads constructor(
 
         val density = mContext.resources.displayMetrics.density
         mDefaultGutterSize = (DEFAULT_GUTTER_SIZE * density).toInt()
+
+        if (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) {
+            mHasSlideAnim = true
+            mDecorView.post {
+                // 反射使activity透明，否则右滑有问题，且不能设置透明主题，否则8.0手机设置屏幕方向会崩溃
+                // 如果不需要设置屏幕方向，可以直接使用透明主题，不需要以下方法
+                // 不用post页面打开就立即右滑还是会闪屏，过一会再右滑才正常
+                Utils.convertActivityToTranslucent(mContext)
+            }
+        }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -227,7 +247,8 @@ class SlideViewGroupNew @JvmOverloads constructor(
                     val distanceY = abs(y - mInitialMotionY)
                     if (mIsRightSlide) {
                         // 右滑
-                        mDecorView.x = x - mInitialMotionX - mTouchSlop
+                        move(x)
+//                        mDecorView.x = x - mInitialMotionX - mTouchSlop
                     } else {
                         if (x - mInitialMotionX > mTouchSlop && distanceY < distanceX) {
                             mIsRightSlide = true
@@ -236,7 +257,6 @@ class SlideViewGroupNew @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                // 当手指还没有抬起时，如果有新app启动，ACTION_UP不会触发，ACTION_CANCEL会出发
                 Log.e("SlideViewGroup", "onTouchEvent: UP")
                 if (mIsBeingDragged) {
                     val endX = event.x
@@ -247,7 +267,7 @@ class SlideViewGroupNew @JvmOverloads constructor(
 
                     if (mIsRightSlide) {
                         if (distanceX > ScreenUtil.getScreenWidth(mContext) / 3 && xDiff > 0) {
-                            moveOn(distanceX)
+                            moveOut(distanceX)
                         } else {
                             backOrigin(xDiff)
                         }
@@ -327,29 +347,44 @@ class SlideViewGroupNew @JvmOverloads constructor(
      * @param distanceX 横向滑动距离
      */
     private fun backOrigin(distanceX: Float) {
-        ObjectAnimator.ofFloat(mDecorView, "X", distanceX, 0f).setDuration(300).start()
+        if (mHasSlideAnim) {
+            ObjectAnimator.ofFloat(mDecorView, "X", distanceX, 0f).setDuration(300).start()
+        }
+    }
+
+    /**
+     * 跟随手指滑动
+     */
+    private fun move(eventX: Float) {
+        if (mHasSlideAnim) {
+            mDecorView.x = eventX - mInitialMotionX - mTouchSlop
+        }
     }
 
     /**
      * 划出屏幕
      * @param distanceX 横向滑动距离
      */
-    private fun moveOn(distanceX: Float) {
-        val valueAnimator = ValueAnimator.ofFloat(distanceX, screenWidth)
-        valueAnimator.duration = 300
-        valueAnimator.start()
-        valueAnimator.addUpdateListener { animation ->
-            mDecorView.x = animation.animatedValue as Float
-        }
-        valueAnimator.addListener(object : Animator.AnimatorListener {
-            override fun onAnimationStart(animation: Animator) {}
-            override fun onAnimationEnd(animation: Animator) {
-                mListener?.onSlideRight()
+    private fun moveOut(distanceX: Float) {
+        if (mHasSlideAnim) {
+            val valueAnimator = ValueAnimator.ofFloat(distanceX, screenWidth)
+            valueAnimator.duration = 300
+            valueAnimator.start()
+            valueAnimator.addUpdateListener { animation ->
+                mDecorView.x = animation.animatedValue as Float
             }
+            valueAnimator.addListener(object : Animator.AnimatorListener {
+                override fun onAnimationStart(animation: Animator) {}
+                override fun onAnimationEnd(animation: Animator) {
+                    mListener?.onSlideRight()
+                }
 
-            override fun onAnimationCancel(animation: Animator) {}
-            override fun onAnimationRepeat(animation: Animator) {}
-        })
+                override fun onAnimationCancel(animation: Animator) {}
+                override fun onAnimationRepeat(animation: Animator) {}
+            })
+        } else {
+            mListener?.onSlideRight()
+        }
     }
 
     fun setListener(listener: ISlideListener) {
